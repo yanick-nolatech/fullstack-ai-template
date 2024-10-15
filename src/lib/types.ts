@@ -1,3 +1,17 @@
+export type CommentType = {
+  id: string;
+  content: string;
+  author: string;
+  createdAt: string;
+};
+
+export type AttachmentType = {
+  id: string;
+  name: string;
+  url: string;
+  uploadedAt: string;
+};
+
 export interface TaskType {
   id: string;
   title: string;
@@ -6,16 +20,13 @@ export interface TaskType {
   dueDate: string;
   status: 'To Do' | 'In Progress' | 'Done';
   columnId: string;
-  assignees: string[];
-  comments: string[];
-  attachments: string[];
-  labels: string[];
-  createdAt: string;
+  assignees?: string[];
+  comments?: CommentType[];
+  attachments?: AttachmentType[];
 }
 
 export interface ColumnType {
   id: string;
   title: string;
-  taskIds: string[];
   order: number;
 }

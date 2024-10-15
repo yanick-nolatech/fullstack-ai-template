@@ -1,5 +1,10 @@
+import { Inter } from "next/font/google";
 import "./globals.css";
-import { AuthProvider } from '@/lib/contexts/AuthContext';
+import { initializeFirebase } from "@/lib/firebase";
+
+const inter = Inter({ subsets: ["latin"] });
+
+initializeFirebase(); // Initialize Firebase when the app starts
 
 export default function RootLayout({
   children,
@@ -8,9 +13,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <AuthProvider>
-        <body>{children}</body>
-      </AuthProvider>
+      <body className={inter.className}>{children}</body>
     </html>
   );
 }

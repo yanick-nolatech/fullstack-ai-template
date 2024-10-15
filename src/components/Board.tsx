@@ -6,7 +6,7 @@ import { PlusCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import Column from './Column';
 import { ColumnType, TaskType } from '@/lib/types';
-import { initializeFirebase, db } from '@/lib/firebase';
+import { db } from '@/lib/firebase';
 import {
   collection,
   query,
@@ -16,39 +16,32 @@ import {
   updateDoc,
   addDoc,
   deleteDoc,
-  Firestore,
-  writeBatch
+  writeBatch,
 } from 'firebase/firestore';
-import { useAuth } from '@/lib/hooks/useAuth';
 import ColumnDialog from './ColumnDialog';
+import TaskDetailDialog from './TaskDetailDialog';
 import TaskDialog from './TaskDialog';
 
 export default function Board() {
   const [columns, setColumns] = useState<ColumnType[]>([]);
   const [tasks, setTasks] = useState<TaskType[]>([]);
-  const { user } = useAuth();
   const [isColumnDialogOpen, setIsColumnDialogOpen] = useState(false);
   const [editingColumn, setEditingColumn] = useState<ColumnType | null>(null);
   const [isTaskDialogOpen, setIsTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskType | null>(null);
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
-  const [firestore, setFirestore] = useState<Firestore | null>(null);
+  const [isTaskDetailDialogOpen, setIsTaskDetailDialogOpen] = useState(false);
+  const [selectedTask, setSelectedTask] = useState<TaskType | null>(null);
 
   useEffect(() => {
-    const fs = initializeFirebase();
-    setFirestore(fs);
-  }, []);
+    const columnsQuery = query(collection(db, 'columns'), orderBy('order'));
+    const tasksQuery = query(collection(db, 'tasks'));
 
-  useEffect(() => {
-    if (!user || !firestore) return;
-
-    const columnsQuery = query(collection(firestore, 'columns'), orderBy('order'));
     const unsubscribeColumns = onSnapshot(columnsQuery, (snapshot) => {
       const columnsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ColumnType));
       setColumns(columnsData);
     });
 
-    const tasksQuery = query(collection(firestore, 'tasks'));
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
       const tasksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TaskType));
       setTasks(tasksData);
@@ -58,77 +51,62 @@ export default function Board() {
       unsubscribeColumns();
       unsubscribeTasks();
     };
-  }, [user, firestore]);
+  }, []);
 
-  const updateTask = async (taskId: string, updates: Partial<TaskType>) => {
-    if (!firestore) return;
-    await updateDoc(doc(firestore, 'tasks', taskId), updates);
+  const addColumn = () => {
+    setIsColumnDialogOpen(true);
+    setEditingColumn(null);
   };
 
-  const deleteTask = async (taskId: string) => {
-    if (!firestore) return;
-    await deleteDoc(doc(firestore, 'tasks', taskId));
-  };
-
-  const addColumn = async () => {
-    if (!firestore) return;
-    const newColumn: Partial<ColumnType> = {
-      title: 'New Column',
-      taskIds: [],
-      order: columns.length,
-    };
-    await addDoc(collection(firestore, 'columns'), newColumn);
-  };
-
-  const updateColumn = async (columnId: string, updates: Partial<ColumnType>) => {
-    if (!firestore) return;
-    await updateDoc(doc(firestore, 'columns', columnId), updates);
-  };
-
-  const deleteColumn = async (columnId: string) => {
-    if (!firestore) return;
-    await deleteDoc(doc(firestore, 'columns', columnId));
-    // You may want to delete all tasks associated with this column as well
+  const addTask = (columnId: string) => {
+    setIsTaskDialogOpen(true);
+    setEditingTask(null);
+    setEditingColumnId(columnId);
   };
 
   const handleColumnSave = async (columnData: Partial<ColumnType>) => {
     if (editingColumn) {
-      await updateColumn(editingColumn.id, columnData);
+      await updateDoc(doc(db, 'columns', editingColumn.id), columnData);
     } else {
-      await addColumn();
+      await addDoc(collection(db, 'columns'), {
+        ...columnData,
+        order: columns.length,
+      });
     }
     setIsColumnDialogOpen(false);
-  };
-
-  const openTaskDialog = (task: TaskType | null, columnId: string) => {
-    setEditingTask(task);
-    setEditingColumnId(columnId);
-    setIsTaskDialogOpen(true);
+    setEditingColumn(null);
   };
 
   const handleTaskSave = async (taskData: Partial<TaskType>) => {
-    if (!firestore) return;
     if (editingTask) {
-      await updateTask(editingTask.id, taskData);
-    } else {
-      const newTask: Partial<TaskType> = {
+      await updateDoc(doc(db, 'tasks', editingTask.id), taskData);
+    } else if (editingColumnId) {
+      await addDoc(collection(db, 'tasks'), {
         ...taskData,
         columnId: editingColumnId,
-        createdAt: new Date().toISOString(),
-      };
-      const docRef = await addDoc(collection(firestore, 'tasks'), newTask);
-      const newTaskWithId = { id: docRef.id, ...newTask } as TaskType;
-      setTasks([...tasks, newTaskWithId]);
-
-      // Update the column's taskIds
-      const updatedColumn = columns.find(col => col.id === editingColumnId);
-      if (updatedColumn) {
-        const updatedTaskIds = [...updatedColumn.taskIds, docRef.id];
-        await updateDoc(doc(firestore, 'columns', editingColumnId), { taskIds: updatedTaskIds });
-      }
+        status: 'To Do',
+      });
     }
     setIsTaskDialogOpen(false);
+    setIsTaskDetailDialogOpen(false);
+    setEditingTask(null);
     setEditingColumnId(null);
+  };
+
+  const handleColumnDelete = async (columnId: string) => {
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'columns', columnId));
+    
+    const tasksToDelete = tasks.filter(task => task.columnId === columnId);
+    tasksToDelete.forEach(task => {
+      batch.delete(doc(db, 'tasks', task.id));
+    });
+
+    await batch.commit();
+  };
+
+  const handleTaskDelete = async (taskId: string) => {
+    await deleteDoc(doc(db, 'tasks', taskId));
   };
 
   const onDragEnd = async (result: DropResult) => {
@@ -150,93 +128,33 @@ export default function Board() {
       const [reorderedColumn] = newColumnOrder.splice(source.index, 1);
       newColumnOrder.splice(destination.index, 0, reorderedColumn);
 
-      const updatedColumns = newColumnOrder.map((col, index) => ({
-        ...col,
-        order: index,
-      }));
-
-      setColumns(updatedColumns);
-
-      // Update the order in Firestore
-      const batch = firestore ? firestore.batch() : null;
-      updatedColumns.forEach((col) => {
-        if (firestore && batch) {
-          const colRef = doc(firestore, 'columns', col.id);
-          batch.update(colRef, { order: col.order });
-        }
+      const batch = writeBatch(db);
+      newColumnOrder.forEach((column, index) => {
+        batch.update(doc(db, 'columns', column.id), { order: index });
       });
-      if (batch) await batch.commit();
+      await batch.commit();
 
       return;
     }
 
-    // Moving tasks
-    const sourceColumn = columns.find(col => col.id === source.droppableId);
-    const destColumn = columns.find(col => col.id === destination.droppableId);
+    const startColumn = columns.find(col => col.id === source.droppableId);
+    const finishColumn = columns.find(col => col.id === destination.droppableId);
 
-    if (sourceColumn && destColumn) {
-      if (sourceColumn.id === destColumn.id) {
-        // Moving within the same column
-        const newTaskIds = Array.from(sourceColumn.taskIds);
-        newTaskIds.splice(source.index, 1);
-        newTaskIds.splice(destination.index, 0, draggableId);
+    if (!startColumn || !finishColumn) {
+      return;
+    }
 
-        const updatedColumn = {
-          ...sourceColumn,
-          taskIds: newTaskIds,
-        };
-
-        setColumns(columns.map(col => 
-          col.id === updatedColumn.id ? updatedColumn : col
-        ));
-
-        // Update in Firestore
-        if (firestore) {
-          await updateDoc(doc(firestore, 'columns', updatedColumn.id), {
-            taskIds: newTaskIds,
-          });
-        }
-      } else {
-        // Moving to a different column
-        const sourceTaskIds = Array.from(sourceColumn.taskIds);
-        sourceTaskIds.splice(source.index, 1);
-        const newSourceColumn = {
-          ...sourceColumn,
-          taskIds: sourceTaskIds,
-        };
-
-        const destTaskIds = Array.from(destColumn.taskIds || []);
-        destTaskIds.splice(destination.index, 0, draggableId);
-        const newDestColumn = {
-          ...destColumn,
-          taskIds: destTaskIds,
-        };
-
-        setColumns(columns.map(col => 
-          col.id === newSourceColumn.id ? newSourceColumn :
-          col.id === newDestColumn.id ? newDestColumn : col
-        ));
-
-        // Update task's columnId
-        setTasks(tasks.map(task =>
-          task.id === draggableId ? { ...task, columnId: destColumn.id } : task
-        ));
-
-        // Update in Firestore
-        if (firestore) {
-          const batch = writeBatch(firestore);
-          batch.update(doc(firestore, 'columns', newSourceColumn.id), {
-            taskIds: sourceTaskIds,
-          });
-          batch.update(doc(firestore, 'columns', newDestColumn.id), {
-            taskIds: destTaskIds,
-          });
-          batch.update(doc(firestore, 'tasks', draggableId), {
-            columnId: newDestColumn.id,
-          });
-          await batch.commit();
-        }
-      }
+    if (startColumn === finishColumn) {
+      // Reordering within the same column
+      await updateDoc(doc(db, 'tasks', draggableId), {
+        columnId: finishColumn.id,
+      });
+    } else {
+      // Moving from one column to another
+      await updateDoc(doc(db, 'tasks', draggableId), {
+        columnId: finishColumn.id,
+        status: finishColumn.title as TaskType['status'],
+      });
     }
   };
 
@@ -256,16 +174,21 @@ export default function Board() {
                   column={column}
                   tasks={tasks.filter(task => task.columnId === column.id)}
                   index={index}
-                  updateColumn={updateColumn}
-                  deleteColumn={deleteColumn}
-                  addTask={(columnId) => openTaskDialog(null, columnId)}
-                  updateTask={updateTask}
-                  deleteTask={deleteTask}
-                  openColumnDialog={(column) => {
+                  onAddTask={addTask}
+                  onEditTask={(task) => {
+                    setEditingTask(task);
+                    setIsTaskDialogOpen(true);
+                  }}
+                  onDeleteTask={handleTaskDelete}
+                  onEditColumn={() => {
                     setEditingColumn(column);
                     setIsColumnDialogOpen(true);
                   }}
-                  openTaskDialog={openTaskDialog}
+                  onDeleteColumn={handleColumnDelete}
+                  onTaskClick={(task) => {
+                    setSelectedTask(task);
+                    setIsTaskDetailDialogOpen(true);
+                  }}
                 />
               ))}
               {provided.placeholder}
@@ -282,9 +205,15 @@ export default function Board() {
       <TaskDialog
         isOpen={isTaskDialogOpen}
         onClose={() => setIsTaskDialogOpen(false)}
-        task={editingTask}
         onSave={handleTaskSave}
-        columnId={editingColumnId}
+        task={editingTask}
+      />
+      <TaskDetailDialog
+        isOpen={isTaskDetailDialogOpen}
+        onClose={() => setIsTaskDetailDialogOpen(false)}
+        onSave={handleTaskSave}
+        task={selectedTask}
+        currentUser="Current User" // Replace with actual current user
       />
     </div>
   );
